@@ -1,4 +1,4 @@
-name: Build and Release KytyPS5
+name: Build PPSS5
 
 on:
   workflow_dispatch:
