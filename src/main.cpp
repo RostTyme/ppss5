@@ -1,6 +1,7 @@
 #include "common/archive.h"
 #include "common/common.h"
 #include "common/file.h"
+#include "common/firmware.h"
 #include "common/stringUtils.h"
 #include "common/threads.h"
 #include "emulator.h"
@@ -10,6 +11,7 @@
 #include <charconv>
 #include <cstdio>
 #include <filesystem>
+#include <optional>
 #include <string_view>
 #include <vector>
 #include <magic_enum.hpp>
@@ -102,6 +104,99 @@ static void PrintUsage() {
 #endif
 	::printf("  --keymap <Control=Input>             DualSense mapping; may be repeated.\n");
 	::printf("  --rd                                 Enable RenderDoc capture.\n");
+	::printf("\nVirtual firmware (no Sony system software is used; default %s):\n",
+	         Firmware::ToString(Firmware::DEFAULT_VERSION).c_str());
+	::printf("  --firmware <X.YY>                    Report this firmware for this boot only.\n");
+	::printf("  --firmware-info                      Show the installed firmware and exit.\n");
+	::printf("  --firmware-update <X.YY>             Install a higher firmware and exit.\n");
+	::printf("  --firmware-allow-downgrade           Let --firmware-update install a lower one.\n");
+	::printf("  --firmware-profile <file>            Firmware profile. Default: %s.\n",
+	         Firmware::PROFILE_FILE_NAME);
+}
+
+struct FirmwareArgs {
+	std::filesystem::path             profile = Firmware::DefaultProfilePath();
+	std::optional<Firmware::Version>  session_override;
+	std::optional<Firmware::Version>  update_target;
+	bool                              info            = false;
+	bool                              allow_downgrade = false;
+};
+
+// Removes the firmware options from argv so the rest of the parser never sees them.
+static bool ExtractFirmwareArgs(std::vector<char*>& args, FirmwareArgs& out) {
+	std::vector<char*> rest;
+	for (size_t i = 0; i < args.size(); i++) {
+		const std::string_view arg = args[i];
+		const bool takes_value = arg == "--firmware" || arg == "--firmware-update" ||
+		                         arg == "--firmware-profile";
+		if (arg == "--firmware-info") {
+			out.info = true;
+			continue;
+		}
+		if (arg == "--firmware-allow-downgrade") {
+			out.allow_downgrade = true;
+			continue;
+		}
+		if (!takes_value) {
+			rest.push_back(args[i]);
+			continue;
+		}
+		if (i + 1 >= args.size()) {
+			::printf("missing value for %s\n", args[i]);
+			return false;
+		}
+		const std::string value = args[++i];
+		if (arg == "--firmware-profile") {
+			out.profile = Common::PathFromUtf8(value);
+			continue;
+		}
+		auto version = Firmware::Parse(value);
+		if (!version) {
+			::printf("invalid firmware version (expected X.YY, e.g. 10.20): %s\n", value.c_str());
+			return false;
+		}
+		(arg == "--firmware" ? out.session_override : out.update_target) = *version;
+	}
+	args = std::move(rest);
+	return true;
+}
+
+// Returns an exit code when the firmware options asked for a command, or nothing to keep going.
+static std::optional<int> RunFirmwareCommand(const FirmwareArgs& fw) {
+	if (fw.update_target) {
+		Firmware::Version previous;
+		const auto result =
+		    Firmware::Update(fw.profile, *fw.update_target, fw.allow_downgrade, &previous);
+		const auto from = Firmware::ToString(previous);
+		const auto to   = Firmware::ToString(*fw.update_target);
+		switch (result) {
+			case Firmware::UpdateResult::Updated:
+				::printf("Virtual firmware updated: %s -> %s (%s)\n", from.c_str(), to.c_str(),
+				         Common::PathToString(fw.profile).c_str());
+				return 0;
+			case Firmware::UpdateResult::AlreadyInstalled:
+				::printf("Virtual firmware %s is already installed.\n", to.c_str());
+				return 0;
+			case Firmware::UpdateResult::DowngradeRefused:
+				::printf("Refusing to downgrade virtual firmware %s -> %s. Add "
+				         "--firmware-allow-downgrade to force it.\n",
+				         from.c_str(), to.c_str());
+				return 1;
+			case Firmware::UpdateResult::WriteFailed:
+				::printf("Could not write %s\n", Common::PathToString(fw.profile).c_str());
+				return 1;
+		}
+	}
+	if (fw.info) {
+		const auto installed = Firmware::LoadProfile(fw.profile);
+		const auto version   = installed.value_or(Firmware::DEFAULT_VERSION);
+		::printf("Virtual firmware: %s (0x%08x)%s\n", Firmware::ToString(version).c_str(),
+		         Firmware::Encode(version), installed ? "" : " [built-in default]");
+		::printf("Profile: %s\n", Common::PathToString(fw.profile).c_str());
+		::printf("PPSS5 is a high-level emulator; it does not load Sony firmware files.\n");
+		return 0;
+	}
+	return std::nullopt;
 }
 
 static bool NextArg(int argc, char* argv[], int& index, std::string& out) {
@@ -464,6 +559,23 @@ static int Main(int argc, char* argv[]) {
 	RunOptions options;
 	bool       show_help = false;
 
+	if (argc < 2) {
+		PrintUsage();
+		return 0;
+	}
+
+	std::vector<char*> args(argv, argv + argc);
+	FirmwareArgs       firmware;
+	if (!ExtractFirmwareArgs(args, firmware)) {
+		return 1;
+	}
+	if (auto code = RunFirmwareCommand(firmware)) {
+		return *code;
+	}
+	Firmware::SetActive(
+	    firmware.session_override.value_or(Firmware::InstalledVersion(firmware.profile)));
+	argc = static_cast<int>(args.size());
+	argv = args.data();
 	if (argc < 2) {
 		PrintUsage();
 		return 0;

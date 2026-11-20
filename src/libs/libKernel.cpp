@@ -3,6 +3,7 @@
 #include "common/common.h"
 #include "common/emulatorConfig.h"
 #include "common/file.h"
+#include "common/firmware.h"
 #include "common/fpEnv.h"
 #include "common/hostException.h"
 #include "common/logging/log.h"
@@ -1310,6 +1311,32 @@ static void* KYTY_SYSV_ABI KernelGetProcParam() {
 	auto* rt = Common::Singleton<Loader::RuntimeLinker>::Instance(); // NOLINT
 
 	return reinterpret_cast<void*>(rt->GetProcParam());
+}
+
+struct KernelSwVersion {
+	uint64_t struct_size;
+	char     text_version[0x1c];
+	uint32_t hex_version;
+};
+
+// sceKernelGetSystemSwVersion: reports the PPSS5 virtual firmware (see common/firmware.h).
+static int KYTY_SYSV_ABI KernelGetSystemSwVersion(KernelSwVersion* version) {
+	PRINT_NAME();
+
+	if (version == nullptr) {
+		return KERNEL_ERROR_EINVAL;
+	}
+
+	const auto     active = Firmware::GetActive();
+	const uint32_t hex    = Firmware::Encode(active);
+
+	version->struct_size = sizeof(KernelSwVersion);
+	std::memset(version->text_version, 0, sizeof(version->text_version));
+	std::snprintf(version->text_version, sizeof(version->text_version), "%2x.%03x.%03x",
+	              hex >> 24u, (hex >> 12u) & 0xfffu, hex & 0xfffu);
+	version->hex_version = hex;
+
+	return OK;
 }
 
 static int KYTY_SYSV_ABI KernelIsTrinityMode() {
@@ -3462,6 +3489,7 @@ LIB_DEFINE(InitLibKernel_1) {
 	LIB_FUNC("6Z83sYWFlA8", LibKernel::exit);
 	LIB_FUNC("8OnWXlgQlvo", LibKernel::KernelRtldThreadAtexitDecrement);
 	LIB_FUNC("959qrazPIrg", LibKernel::KernelGetProcParam);
+	LIB_FUNC("Mv1zUObHvXI", LibKernel::KernelGetSystemSwVersion);
 	LIB_FUNC("tU5e3f9gSiU", LibKernel::KernelIsTrinityMode);
 	LIB_FUNC("NH6xARDOVv8", LibKernel::KernelGetOperationMode);
 	LIB_FUNC("fTx66l5iWIA", FileSystem::KernelFsync);

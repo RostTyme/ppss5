@@ -166,6 +166,7 @@ void Psf::OpenJson(const std::filesystem::path& file_name) {
 	add_string_param("contentId", "CONTENT_ID");
 	add_string_param("contentVersion", "APP_VER");
 	add_string_param("appVersion", "APP_VER");
+	add_string_param("requiredSystemSoftwareVersion", "SYSTEM_VER");
 	AddParamInt("ATTRIBUTE", 0);
 	add_int_param("attribute", "ATTRIBUTE");
 	add_int_param("attribute3", "ATTRIBUTE3");

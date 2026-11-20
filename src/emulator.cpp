@@ -4,6 +4,7 @@
 #include "common/assert.h"
 #include "common/emulatorConfig.h"
 #include "common/file.h"
+#include "common/firmware.h"
 #include "common/logging/log.h"
 #include "common/profiler.h"
 #include "common/singleton.h"
@@ -139,6 +140,30 @@ static void Execute(const std::filesystem::path& game_patch) {
 	std::quick_exit(0);
 }
 
+static void ReportFirmware() {
+	const auto  active = Firmware::GetActive();
+	std::string required_text;
+	Log::WriteToConsoleAndLog(
+	    fmt::format("Firmware: PPSS5 virtual {} (HLE, no Sony system software)\n",
+	                Firmware::ToString(active)));
+	if (!Loader::SystemContentParamSfoGetString("SYSTEM_VER", &required_text)) {
+		return;
+	}
+	const auto required = Firmware::ParseRequiredSystemSoftwareVersion(required_text);
+	if (!required) {
+		return;
+	}
+	Log::WriteToConsoleAndLog(
+	    fmt::format("Game requires firmware: {}\n", Firmware::ToString(*required)));
+	if (active < *required) {
+		Log::WriteToConsoleAndLog(fmt::format(
+		    "WARNING: virtual firmware {} is older than the {} this game requires.\n"
+		    "         Run: kyty_emulator --firmware-update {}\n",
+		    Firmware::ToString(active), Firmware::ToString(*required),
+		    Firmware::ToString(*required)));
+	}
+}
+
 void Run(const RunOptions& options) {
 	if (options.app0_dir.empty()) {
 		EXIT("app0 directory is required\n");
@@ -165,6 +190,8 @@ void Run(const RunOptions& options) {
 	if (!title_id.empty()) {
 		Log::WriteToConsoleAndLog(fmt::format("Title ID: {}\n", title_id));
 	}
+
+	ReportFirmware();
 
 	int ok = atexit(KytyClose);
 	EXIT_NOT_IMPLEMENTED(ok != 0);
